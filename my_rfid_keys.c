@@ -119,6 +119,28 @@ static const char* my_rfid_keys_menu_label(MyRfidKeysMenuItem item) {
     return "Exit";
 }
 
+static void my_rfid_keys_draw_menu_icon(
+    Canvas* canvas,
+    MyRfidKeysMenuItem item,
+    int32_t x,
+    int32_t y) {
+    if(item == MyRfidKeysMenuRead) {
+        canvas_draw_icon(canvas, x, y - 9, &I_add_key_10x10);
+    } else if(item == MyRfidKeysMenuOpen) {
+        canvas_draw_icon(canvas, x, y - 9, &I_open_10x10);
+    } else if(item == MyRfidKeysMenuDelete) {
+        canvas_draw_icon(canvas, x, y - 9, &I_delete_key_10x10);
+    } else if(item == MyRfidKeysMenuEmulate) {
+        canvas_draw_icon(canvas, x, y - 9, &I_emulate_10x10);
+    } else if(item == MyRfidKeysMenuClose) {
+        canvas_draw_icon(canvas, x, y - 9, &I_close_file_10x10);
+    } else if(item == MyRfidKeysMenuAbout) {
+        canvas_draw_icon(canvas, x, y - 9, &I_about_10x10);
+    } else {
+        canvas_draw_icon(canvas, x, y - 9, &I_exit_10x10);
+    }
+}
+
 static void my_rfid_keys_view_update(MyRfidKeysApp* app) {
     view_commit_model(app->main_view, true);
 }
@@ -155,12 +177,14 @@ static void my_rfid_keys_draw_callback(Canvas* canvas, void* model) {
         for(uint8_t row = 0; row < rows_to_draw; row++) {
             const uint8_t item_index = first_visible + row;
             const uint8_t y = 24 + (row * 12);
+            const MyRfidKeysMenuItem item = my_rfid_keys_menu_item_at(app, item_index);
             canvas_draw_str(canvas, 18, y, app->menu_index == item_index ? ">" : " ");
+            my_rfid_keys_draw_menu_icon(canvas, item, 28, y);
             canvas_draw_str(
                 canvas,
-                30,
+                42,
                 y,
-                my_rfid_keys_menu_label(my_rfid_keys_menu_item_at(app, item_index)));
+                my_rfid_keys_menu_label(item));
         }
     } else if(app->state == MyRfidKeysViewScanning) {
         canvas_draw_str_aligned(canvas, 64, 18, AlignCenter, AlignCenter, "Scan RFID");
