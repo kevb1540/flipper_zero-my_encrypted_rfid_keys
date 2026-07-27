@@ -144,12 +144,23 @@ static void my_rfid_keys_draw_callback(Canvas* canvas, void* model) {
         canvas_draw_str_aligned(canvas, 64, 10, AlignCenter, AlignCenter, "My RFID Keys");
         canvas_set_font(canvas, FontSecondary);
         const uint8_t menu_count = my_rfid_keys_menu_count(app);
-        const uint8_t start_y = menu_count == 5 ? 18 : 24;
-        const uint8_t step_y = menu_count == 5 ? 11 : 12;
-        for(uint8_t i = 0; i < menu_count; i++) {
-            const uint8_t y = start_y + (i * step_y);
-            canvas_draw_str(canvas, 18, y, app->menu_index == i ? ">" : " ");
-            canvas_draw_str(canvas, 30, y, my_rfid_keys_menu_label(my_rfid_keys_menu_item_at(app, i)));
+        const uint8_t visible_rows = 4;
+        const uint8_t rows_to_draw = menu_count < visible_rows ? menu_count : visible_rows;
+        uint8_t first_visible = 0;
+
+        if(app->menu_index >= visible_rows) {
+            first_visible = app->menu_index - visible_rows + 1;
+        }
+
+        for(uint8_t row = 0; row < rows_to_draw; row++) {
+            const uint8_t item_index = first_visible + row;
+            const uint8_t y = 24 + (row * 12);
+            canvas_draw_str(canvas, 18, y, app->menu_index == item_index ? ">" : " ");
+            canvas_draw_str(
+                canvas,
+                30,
+                y,
+                my_rfid_keys_menu_label(my_rfid_keys_menu_item_at(app, item_index)));
         }
     } else if(app->state == MyRfidKeysViewScanning) {
         canvas_draw_str_aligned(canvas, 64, 18, AlignCenter, AlignCenter, "Scan RFID");
@@ -360,7 +371,7 @@ static bool my_rfid_keys_wait_for_menu(MyRfidKeysApp* app, View* view, MyRfidKey
         if(event.key == InputKeyBack) {
             return false;
         } else if(event.key == InputKeyUp) {
-            if(app->menu_index > MyRfidKeysMenuRead) {
+            if(app->menu_index > 0) {
                 app->menu_index--;
             }
         } else if(event.key == InputKeyDown) {
