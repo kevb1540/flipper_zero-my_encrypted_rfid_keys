@@ -197,7 +197,7 @@ static void my_rfid_keys_flush_input(MyRfidKeysApp* app) {
 }
 
 static bool my_rfid_keys_is_button_press(const InputEvent* event) {
-    return event->type == InputTypeRelease || event->type == InputTypeShort;
+    return event->type == InputTypeShort;
 }
 
 static bool my_rfid_keys_input_callback(InputEvent* event, void* context) {

@@ -11,7 +11,7 @@ App(
     fap_icon="my_rfid_keys.png",  # 10x10 1-bit PNG
     fap_description="Read and save LF RFID tags",
     fap_author="Kevin W. Brown",
-    # fap_weburl="https://github.com/user/my_rfid_keys",
+    fap_weburl="https://github.com/kevb1540/flipper_zero-my_encrypted_rfid_keys",
     fap_icon_assets="images",
     fap_libs=["liblfrfid.a", "libtoolbox.a"],
 )
