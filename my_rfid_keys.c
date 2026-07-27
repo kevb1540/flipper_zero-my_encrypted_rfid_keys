@@ -771,6 +771,7 @@ static bool my_rfid_keys_select_key_file(
     FuriString* path = furi_string_alloc_set(MY_RFID_KEYS_FOLDER);
     DialogsFileBrowserOptions browser_options;
 
+    furi_string_set(result_path, MY_RFID_KEYS_FOLDER);
     app->state = state;
     if(state == MyRfidKeysViewDeleting) {
         furi_string_set(app->line_1, "Delete Key");
