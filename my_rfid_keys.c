@@ -831,6 +831,7 @@ static void my_rfid_keys_open_file(
     UNUSED(gui);
     FuriString* result_path = furi_string_alloc();
     FuriString* temp_path = furi_string_alloc();
+    bool password_ok = false;
 
     if(!my_rfid_keys_select_key_file(
            app, dialogs, storage, result_path, MyRfidKeysViewOpening)) {
@@ -839,29 +840,44 @@ static void my_rfid_keys_open_file(
     }
 
     my_rfid_keys_build_filename(temp_path, "open.tmp");
-    if(!my_rfid_keys_ask_password(app, app->main_view)) {
-        FURI_LOG_I(TAG, "Password prompt cancelled");
-        goto cleanup;
+    for(uint8_t attempt = 0; attempt < 3; attempt++) {
+        if(!my_rfid_keys_ask_password(app, app->main_view)) {
+            FURI_LOG_I(TAG, "Password prompt cancelled");
+            goto cleanup;
+        }
+
+        my_rfid_keys_show_working(app, "Opening", furi_string_get_cstr(result_path));
+
+        if(my_rfid_keys_decrypt_file(
+               storage,
+               furi_string_get_cstr(result_path),
+               furi_string_get_cstr(temp_path),
+               app->password)) {
+            app->loaded_protocol = lfrfid_dict_file_load(dict, furi_string_get_cstr(temp_path));
+            if(app->loaded_protocol != PROTOCOL_NO) {
+                password_ok = true;
+                break;
+            }
+        }
+
+        app->loaded_protocol = PROTOCOL_NO;
+        memset(app->password, 0, sizeof(app->password));
+        storage_common_remove(storage, furi_string_get_cstr(temp_path));
+        app->state = MyRfidKeysViewSaveError;
+        furi_string_set(app->line_1, "Wrong Password");
+        if(attempt < 2) {
+            furi_string_printf(app->line_2, "%u tries left", (unsigned int)(2 - attempt));
+            my_rfid_keys_view_update(app);
+            furi_delay_ms(1200);
+        } else {
+            furi_string_set(app->line_2, "Back to menu");
+            my_rfid_keys_view_update(app);
+            furi_delay_ms(1500);
+        }
     }
 
-    my_rfid_keys_show_working(app, "Opening", furi_string_get_cstr(result_path));
-
-    if(!my_rfid_keys_decrypt_file(
-           storage,
-           furi_string_get_cstr(result_path),
-           furi_string_get_cstr(temp_path),
-           app->password)) {
-        app->state = MyRfidKeysViewSaveError;
-        furi_string_set(app->line_1, "Open Failed");
-        furi_string_set(app->line_2, "Decrypt error");
-        goto cleanup;
-    }
-
-    app->loaded_protocol = lfrfid_dict_file_load(dict, furi_string_get_cstr(temp_path));
-    if(app->loaded_protocol == PROTOCOL_NO) {
-        app->state = MyRfidKeysViewSaveError;
-        furi_string_set(app->line_1, "Open Failed");
-        furi_string_set(app->line_2, "Wrong password or file");
+    if(!password_ok) {
+        app->state = MyRfidKeysViewMenu;
         goto cleanup;
     }
 
