@@ -26,8 +26,9 @@
 #define MY_RFID_KEYS_PASSWORD_DONE (1U << 2)
 #define MY_RFID_KEYS_PASSWORD_MAX_LEN 32
 #define MY_RFID_KEYS_FILENAME_MAX_LEN 48
-#define MY_RFID_KEYS_ENCRYPTED_MAGIC "MRK2"
+#define MY_RFID_KEYS_ENCRYPTED_MAGIC "MRK3"
 #define MY_RFID_KEYS_AES_IV_SIZE 12
+#define MY_RFID_KEYS_AES_TAG_SIZE 16
 #define MY_RFID_KEYS_MAX_FILE_SIZE (16 * 1024)
 
 typedef enum {
@@ -570,20 +571,52 @@ static void my_rfid_keys_derive_aes_key(
     }
 }
 
-static bool my_rfid_keys_aes256_ctr_crypt(
+static bool my_rfid_keys_aes256_gcm_encrypt(
     const char* password,
     const uint8_t iv[MY_RFID_KEYS_AES_IV_SIZE],
     const uint8_t* input,
     uint8_t* output,
-    size_t size) {
+    size_t size,
+    uint8_t tag[MY_RFID_KEYS_AES_TAG_SIZE]) {
     uint8_t key[32];
-    bool success;
 
     my_rfid_keys_derive_aes_key(password, iv, key);
-    success = furi_hal_crypto_ctr(key, iv, input, output, size);
+    const FuriHalCryptoGCMState state = furi_hal_crypto_gcm_encrypt_and_tag(
+        key,
+        iv,
+        (const uint8_t*)MY_RFID_KEYS_ENCRYPTED_MAGIC,
+        4,
+        input,
+        output,
+        size,
+        tag);
     memset(key, 0, sizeof(key));
 
-    return success;
+    return state == FuriHalCryptoGCMStateOk;
+}
+
+static bool my_rfid_keys_aes256_gcm_decrypt(
+    const char* password,
+    const uint8_t iv[MY_RFID_KEYS_AES_IV_SIZE],
+    const uint8_t* input,
+    uint8_t* output,
+    size_t size,
+    const uint8_t tag[MY_RFID_KEYS_AES_TAG_SIZE]) {
+    uint8_t key[32];
+
+    my_rfid_keys_derive_aes_key(password, iv, key);
+    const FuriHalCryptoGCMState state = furi_hal_crypto_gcm_decrypt_and_verify(
+        key,
+        iv,
+        (const uint8_t*)MY_RFID_KEYS_ENCRYPTED_MAGIC,
+        4,
+        input,
+        output,
+        size,
+        tag);
+    memset(key, 0, sizeof(key));
+
+    return state == FuriHalCryptoGCMStateOk;
 }
 
 static bool my_rfid_keys_encrypt_file(
@@ -595,6 +628,7 @@ static bool my_rfid_keys_encrypt_file(
     File* source = storage_file_alloc(storage);
     File* encrypted = storage_file_alloc(storage);
     uint8_t iv[MY_RFID_KEYS_AES_IV_SIZE];
+    uint8_t tag[MY_RFID_KEYS_AES_TAG_SIZE];
     uint8_t* plaintext = NULL;
     uint8_t* ciphertext = NULL;
     size_t file_size = 0;
@@ -627,8 +661,9 @@ static bool my_rfid_keys_encrypt_file(
     }
 
     furi_hal_random_fill_buf(iv, sizeof(iv));
-    if(!my_rfid_keys_aes256_ctr_crypt(password, iv, plaintext, ciphertext, file_size)) {
-        FURI_LOG_E(TAG, "AES-256 encryption failed");
+    if(!my_rfid_keys_aes256_gcm_encrypt(
+           password, iv, plaintext, ciphertext, file_size, tag)) {
+        FURI_LOG_E(TAG, "AES-256-GCM encryption failed");
         goto cleanup;
     }
 
@@ -640,6 +675,7 @@ static bool my_rfid_keys_encrypt_file(
 
     if(storage_file_write(encrypted, MY_RFID_KEYS_ENCRYPTED_MAGIC, 4) != 4) goto cleanup;
     if(storage_file_write(encrypted, iv, sizeof(iv)) != sizeof(iv)) goto cleanup;
+    if(storage_file_write(encrypted, tag, sizeof(tag)) != sizeof(tag)) goto cleanup;
     if(storage_file_write(encrypted, ciphertext, file_size) != file_size) goto cleanup;
     success = true;
 
@@ -671,6 +707,7 @@ static bool my_rfid_keys_decrypt_file(
     File* encrypted = storage_file_alloc(storage);
     File* output = storage_file_alloc(storage);
     uint8_t iv[MY_RFID_KEYS_AES_IV_SIZE];
+    uint8_t tag[MY_RFID_KEYS_AES_TAG_SIZE];
     uint8_t* ciphertext = NULL;
     uint8_t* plaintext = NULL;
     size_t payload_size = 0;
@@ -686,19 +723,21 @@ static bool my_rfid_keys_decrypt_file(
 
     if(storage_file_read(encrypted, magic, sizeof(magic)) != sizeof(magic) ||
        memcmp(magic, MY_RFID_KEYS_ENCRYPTED_MAGIC, sizeof(magic)) != 0 ||
-       storage_file_read(encrypted, iv, sizeof(iv)) != sizeof(iv)) {
+       storage_file_read(encrypted, iv, sizeof(iv)) != sizeof(iv) ||
+       storage_file_read(encrypted, tag, sizeof(tag)) != sizeof(tag)) {
         FURI_LOG_E(TAG, "Encrypted file header is invalid");
         goto cleanup;
     }
 
     const uint64_t encrypted_size = storage_file_size(encrypted);
-    if(encrypted_size <= sizeof(magic) + sizeof(iv) ||
-       encrypted_size > sizeof(magic) + sizeof(iv) + MY_RFID_KEYS_MAX_FILE_SIZE) {
+    const size_t header_size = sizeof(magic) + sizeof(iv) + sizeof(tag);
+    if(encrypted_size <= header_size ||
+       encrypted_size > header_size + MY_RFID_KEYS_MAX_FILE_SIZE) {
         FURI_LOG_E(TAG, "Encrypted file size is invalid");
         goto cleanup;
     }
 
-    payload_size = (size_t)(encrypted_size - sizeof(magic) - sizeof(iv));
+    payload_size = (size_t)(encrypted_size - header_size);
     ciphertext = malloc(payload_size);
     plaintext = malloc(payload_size);
     if(!ciphertext || !plaintext) {
@@ -711,8 +750,9 @@ static bool my_rfid_keys_decrypt_file(
         goto cleanup;
     }
 
-    if(!my_rfid_keys_aes256_ctr_crypt(password, iv, ciphertext, plaintext, payload_size)) {
-        FURI_LOG_E(TAG, "AES-256 decryption failed");
+    if(!my_rfid_keys_aes256_gcm_decrypt(
+           password, iv, ciphertext, plaintext, payload_size, tag)) {
+        FURI_LOG_W(TAG, "AES-256-GCM authentication failed");
         goto cleanup;
     }
 
