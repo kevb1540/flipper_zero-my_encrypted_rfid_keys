@@ -47,10 +47,8 @@ typedef enum {
     MyRfidKeysViewOpening,
     MyRfidKeysViewDeleting,
     MyRfidKeysViewConfirmDelete,
-    MyRfidKeysViewFileActions,
-    MyRfidKeysViewTagInfo,
+    MyRfidKeysViewAbout,
     MyRfidKeysViewEmulating,
-    MyRfidKeysViewWriting,
     MyRfidKeysViewSaved,
     MyRfidKeysViewSaveError,
     MyRfidKeysViewTimeout,
@@ -63,11 +61,6 @@ typedef struct {
 } MyRfidKeysReadContext;
 
 typedef struct {
-    FuriEventFlag* events;
-    LFRFIDWorkerWriteResult result;
-} MyRfidKeysWriteContext;
-
-typedef struct {
     FuriMessageQueue* input_queue;
     FuriString* line_1;
     FuriString* line_2;
@@ -75,6 +68,7 @@ typedef struct {
     char password[MY_RFID_KEYS_PASSWORD_MAX_LEN + 1];
     char filename_input[MY_RFID_KEYS_FILENAME_MAX_LEN + 1];
     uint8_t menu_index;
+    bool file_open;
     ProtocolId loaded_protocol;
     MyRfidKeysViewState state;
     ViewHolder* view_holder;
@@ -86,15 +80,44 @@ typedef enum {
     MyRfidKeysMenuRead,
     MyRfidKeysMenuOpen,
     MyRfidKeysMenuDelete,
+    MyRfidKeysMenuEmulate,
+    MyRfidKeysMenuClose,
+    MyRfidKeysMenuAbout,
     MyRfidKeysMenuExit,
 } MyRfidKeysMenuItem;
 
-typedef enum {
-    MyRfidKeysFileActionView,
-    MyRfidKeysFileActionEmulate,
-    MyRfidKeysFileActionWrite,
-    MyRfidKeysFileActionClose,
-} MyRfidKeysFileAction;
+static bool my_rfid_keys_has_open_file(const MyRfidKeysApp* app) {
+    return app->file_open && app->loaded_protocol != PROTOCOL_NO;
+}
+
+static uint8_t my_rfid_keys_menu_count(const MyRfidKeysApp* app) {
+    return my_rfid_keys_has_open_file(app) ? 4 : 5;
+}
+
+static MyRfidKeysMenuItem my_rfid_keys_menu_item_at(const MyRfidKeysApp* app, uint8_t index) {
+    if(my_rfid_keys_has_open_file(app)) {
+        if(index == 0) return MyRfidKeysMenuEmulate;
+        if(index == 1) return MyRfidKeysMenuClose;
+        if(index == 2) return MyRfidKeysMenuAbout;
+        return MyRfidKeysMenuExit;
+    }
+
+    if(index == 0) return MyRfidKeysMenuRead;
+    if(index == 1) return MyRfidKeysMenuOpen;
+    if(index == 2) return MyRfidKeysMenuDelete;
+    if(index == 3) return MyRfidKeysMenuAbout;
+    return MyRfidKeysMenuExit;
+}
+
+static const char* my_rfid_keys_menu_label(MyRfidKeysMenuItem item) {
+    if(item == MyRfidKeysMenuRead) return "Add Key";
+    if(item == MyRfidKeysMenuOpen) return "Open";
+    if(item == MyRfidKeysMenuDelete) return "Delete Key";
+    if(item == MyRfidKeysMenuEmulate) return "Emulate";
+    if(item == MyRfidKeysMenuClose) return "Close File";
+    if(item == MyRfidKeysMenuAbout) return "About";
+    return "Exit";
+}
 
 static void my_rfid_keys_view_update(MyRfidKeysApp* app) {
     view_commit_model(app->main_view, true);
@@ -120,14 +143,14 @@ static void my_rfid_keys_draw_callback(Canvas* canvas, void* model) {
     } else if(app->state == MyRfidKeysViewMenu) {
         canvas_draw_str_aligned(canvas, 64, 10, AlignCenter, AlignCenter, "My RFID Keys");
         canvas_set_font(canvas, FontSecondary);
-        canvas_draw_str(canvas, 18, 23, app->menu_index == MyRfidKeysMenuRead ? ">" : " ");
-        canvas_draw_str(canvas, 30, 23, "Read");
-        canvas_draw_str(canvas, 18, 35, app->menu_index == MyRfidKeysMenuOpen ? ">" : " ");
-        canvas_draw_str(canvas, 30, 35, "Open");
-        canvas_draw_str(canvas, 18, 47, app->menu_index == MyRfidKeysMenuDelete ? ">" : " ");
-        canvas_draw_str(canvas, 30, 47, "Delete Key");
-        canvas_draw_str(canvas, 18, 59, app->menu_index == MyRfidKeysMenuExit ? ">" : " ");
-        canvas_draw_str(canvas, 30, 59, "Exit");
+        const uint8_t menu_count = my_rfid_keys_menu_count(app);
+        const uint8_t start_y = menu_count == 5 ? 18 : 24;
+        const uint8_t step_y = menu_count == 5 ? 11 : 12;
+        for(uint8_t i = 0; i < menu_count; i++) {
+            const uint8_t y = start_y + (i * step_y);
+            canvas_draw_str(canvas, 18, y, app->menu_index == i ? ">" : " ");
+            canvas_draw_str(canvas, 30, y, my_rfid_keys_menu_label(my_rfid_keys_menu_item_at(app, i)));
+        }
     } else if(app->state == MyRfidKeysViewScanning) {
         canvas_draw_str_aligned(canvas, 64, 18, AlignCenter, AlignCenter, "Scan RFID");
         canvas_set_font(canvas, FontSecondary);
@@ -136,17 +159,6 @@ static void my_rfid_keys_draw_callback(Canvas* canvas, void* model) {
     } else if(app->state == MyRfidKeysViewReadSuccess) {
         canvas_draw_icon(canvas, 40, 2, &I_success_48x32);
         canvas_draw_str_aligned(canvas, 64, 48, AlignCenter, AlignCenter, "Success");
-    } else if(app->state == MyRfidKeysViewFileActions) {
-        canvas_draw_str_aligned(canvas, 64, 8, AlignCenter, AlignCenter, "RFID Key");
-        canvas_set_font(canvas, FontSecondary);
-        canvas_draw_str(canvas, 18, 22, app->menu_index == MyRfidKeysFileActionView ? ">" : " ");
-        canvas_draw_str(canvas, 30, 22, "View");
-        canvas_draw_str(canvas, 18, 34, app->menu_index == MyRfidKeysFileActionEmulate ? ">" : " ");
-        canvas_draw_str(canvas, 30, 34, "Emulate");
-        canvas_draw_str(canvas, 18, 46, app->menu_index == MyRfidKeysFileActionWrite ? ">" : " ");
-        canvas_draw_str(canvas, 30, 46, "Write");
-        canvas_draw_str(canvas, 18, 58, app->menu_index == MyRfidKeysFileActionClose ? ">" : " ");
-        canvas_draw_str(canvas, 30, 58, "Close File");
     } else if(app->state == MyRfidKeysViewEncrypting || app->state == MyRfidKeysViewDecrypting ||
               app->state == MyRfidKeysViewWorking) {
         const uint8_t frame = (furi_get_tick() / furi_ms_to_ticks(150)) % COUNT_OF(hourglass_frames);
@@ -172,6 +184,11 @@ static void my_rfid_keys_draw_callback(Canvas* canvas, void* model) {
         canvas_draw_str_aligned(canvas, 64, 38, AlignCenter, AlignCenter, "permanently deleted.");
         canvas_draw_str(canvas, 8, 60, "< No");
         canvas_draw_str_aligned(canvas, 120, 60, AlignRight, AlignBottom, "Yes >");
+    } else if(app->state == MyRfidKeysViewAbout) {
+        canvas_draw_str_aligned(canvas, 64, 22, AlignCenter, AlignCenter, "My RFID Keys");
+        canvas_set_font(canvas, FontSecondary);
+        canvas_draw_str_aligned(canvas, 64, 42, AlignCenter, AlignCenter, "\xC2\xA9 Kevin W Brown 2026");
+        canvas_draw_str_aligned(canvas, 64, 58, AlignCenter, AlignCenter, "Back: menu");
     } else if(app->state == MyRfidKeysViewSaved) {
         canvas_draw_icon(canvas, 40, 0, &I_success_48x32);
         canvas_set_font(canvas, FontSecondary);
@@ -216,13 +233,6 @@ static void my_rfid_keys_read_callback(
         read_context->protocol = protocol;
         furi_event_flag_set(read_context->events, MY_RFID_KEYS_READ_DONE);
     }
-}
-
-static void my_rfid_keys_write_callback(LFRFIDWorkerWriteResult result, void* context) {
-    MyRfidKeysWriteContext* write_context = context;
-
-    write_context->result = result;
-    furi_event_flag_set(write_context->events, MY_RFID_KEYS_WRITE_DONE);
 }
 
 static bool my_rfid_keys_ensure_folder(Storage* storage) {
@@ -335,7 +345,7 @@ static bool my_rfid_keys_wait_for_menu(MyRfidKeysApp* app, View* view, MyRfidKey
     InputEvent event;
 
     app->state = MyRfidKeysViewMenu;
-    app->menu_index = MyRfidKeysMenuRead;
+    app->menu_index = 0;
     my_rfid_keys_view_update(app);
 
     while(true) {
@@ -354,11 +364,11 @@ static bool my_rfid_keys_wait_for_menu(MyRfidKeysApp* app, View* view, MyRfidKey
                 app->menu_index--;
             }
         } else if(event.key == InputKeyDown) {
-            if(app->menu_index < MyRfidKeysMenuExit) {
+            if(app->menu_index < my_rfid_keys_menu_count(app) - 1) {
                 app->menu_index++;
             }
         } else if(event.key == InputKeyOk) {
-            *item = app->menu_index;
+            *item = my_rfid_keys_menu_item_at(app, app->menu_index);
             return true;
         }
 
@@ -376,6 +386,13 @@ static void my_rfid_keys_wait_for_exit(MyRfidKeysApp* app) {
             }
         }
     }
+}
+
+static void my_rfid_keys_show_about(MyRfidKeysApp* app) {
+    app->state = MyRfidKeysViewAbout;
+    my_rfid_keys_view_update(app);
+    my_rfid_keys_wait_for_exit(app);
+    app->state = MyRfidKeysViewMenu;
 }
 
 static void my_rfid_keys_password_callback(void* context) {
@@ -470,45 +487,6 @@ static bool my_rfid_keys_ask_password(MyRfidKeysApp* app, View* view) {
     }
 
     return true;
-}
-
-static bool my_rfid_keys_wait_for_file_action(
-    MyRfidKeysApp* app,
-    View* view,
-    MyRfidKeysFileAction* action) {
-    UNUSED(view);
-    InputEvent event;
-
-    app->state = MyRfidKeysViewFileActions;
-    app->menu_index = MyRfidKeysFileActionView;
-    my_rfid_keys_view_update(app);
-
-    while(true) {
-        if(furi_message_queue_get(app->input_queue, &event, FuriWaitForever) != FuriStatusOk) {
-            continue;
-        }
-
-        if(!my_rfid_keys_is_button_press(&event)) {
-            continue;
-        }
-
-        if(event.key == InputKeyBack) {
-            return false;
-        } else if(event.key == InputKeyUp) {
-            if(app->menu_index > MyRfidKeysFileActionView) {
-                app->menu_index--;
-            }
-        } else if(event.key == InputKeyDown) {
-            if(app->menu_index < MyRfidKeysFileActionClose) {
-                app->menu_index++;
-            }
-        } else if(event.key == InputKeyOk) {
-            *action = app->menu_index;
-            return true;
-        }
-
-        my_rfid_keys_view_update(app);
-    }
 }
 
 static bool my_rfid_keys_read_full_file(File* file, uint8_t* buffer, size_t size) {
@@ -730,19 +708,6 @@ cleanup:
     return success;
 }
 
-static void my_rfid_keys_show_loaded_info(
-    MyRfidKeysApp* app,
-    ProtocolDict* dict,
-    ProtocolId protocol,
-    View* view) {
-    UNUSED(view);
-    furi_string_printf(app->line_1, "%s", protocol_dict_get_name(dict, protocol));
-    protocol_dict_render_uid(dict, app->line_2, protocol);
-    app->state = MyRfidKeysViewTagInfo;
-    my_rfid_keys_view_update(app);
-    my_rfid_keys_wait_for_exit(app);
-}
-
 static void my_rfid_keys_emulate_loaded(
     MyRfidKeysApp* app,
     LFRFIDWorker* worker,
@@ -760,65 +725,6 @@ static void my_rfid_keys_emulate_loaded(
     my_rfid_keys_wait_for_exit(app);
     lfrfid_worker_stop(worker);
     lfrfid_worker_stop_thread(worker);
-}
-
-static void my_rfid_keys_write_loaded(
-    MyRfidKeysApp* app,
-    LFRFIDWorker* worker,
-    ProtocolDict* dict,
-    FuriEventFlag* events,
-    ProtocolId protocol,
-    View* view) {
-    UNUSED(view);
-    InputEvent event;
-    MyRfidKeysWriteContext write_context = {
-        .events = events,
-        .result = LFRFIDWorkerWriteProtocolCannotBeWritten,
-    };
-
-    furi_event_flag_clear(events, MY_RFID_KEYS_WRITE_DONE);
-    furi_string_printf(app->line_1, "Writing %s", protocol_dict_get_name(dict, protocol));
-    furi_string_set(app->line_2, "Hold writable tag near back");
-    app->state = MyRfidKeysViewWriting;
-    my_rfid_keys_view_update(app);
-
-    lfrfid_worker_start_thread(worker);
-    lfrfid_worker_write_start(worker, protocol, my_rfid_keys_write_callback, &write_context);
-
-    while(true) {
-        const uint32_t flags =
-            furi_event_flag_wait(events, MY_RFID_KEYS_WRITE_DONE, FuriFlagWaitAny, 0);
-        if(flags & MY_RFID_KEYS_WRITE_DONE) {
-            break;
-        }
-
-        if(furi_message_queue_get(app->input_queue, &event, 100) == FuriStatusOk) {
-            if(my_rfid_keys_is_button_press(&event) && event.key == InputKeyBack) {
-                break;
-            }
-        }
-    }
-
-    lfrfid_worker_stop(worker);
-    lfrfid_worker_stop_thread(worker);
-
-    if(write_context.result == LFRFIDWorkerWriteOK) {
-        furi_string_set(app->line_1, "Write Complete");
-        furi_string_set(app->line_2, "Tag saved");
-    } else if(write_context.result == LFRFIDWorkerWriteProtocolCannotBeWritten) {
-        furi_string_set(app->line_1, "Cannot Write");
-        furi_string_set(app->line_2, "Protocol unsupported");
-    } else if(write_context.result == LFRFIDWorkerWriteFobCannotBeWritten) {
-        furi_string_set(app->line_1, "Cannot Write");
-        furi_string_set(app->line_2, "Tag type unsupported");
-    } else {
-        furi_string_set(app->line_1, "Cannot Write");
-        furi_string_set(app->line_2, "Too much data");
-    }
-
-    app->state = MyRfidKeysViewTagInfo;
-    my_rfid_keys_view_update(app);
-    my_rfid_keys_wait_for_exit(app);
 }
 
 static bool my_rfid_keys_select_key_file(
@@ -884,9 +790,7 @@ static void my_rfid_keys_open_file(
     View* view,
     Storage* storage,
     DialogsApp* dialogs,
-    ProtocolDict* dict,
-    LFRFIDWorker* worker,
-    FuriEventFlag* events) {
+    ProtocolDict* dict) {
     UNUSED(view);
     UNUSED(gui);
     FuriString* result_path = furi_string_alloc();
@@ -930,25 +834,12 @@ static void my_rfid_keys_open_file(
         "Loaded encrypted RFID file: %s",
         furi_string_get_cstr(result_path));
 
+    app->file_open = true;
     my_rfid_keys_show_done(app, "Opened", furi_string_get_cstr(result_path));
     my_rfid_keys_view_update(app);
     furi_delay_ms(MY_RFID_KEYS_SUCCESS_MS);
     my_rfid_keys_flush_input(app);
-
-    MyRfidKeysFileAction action = MyRfidKeysFileActionView;
-    if(my_rfid_keys_wait_for_file_action(app, app->main_view, &action)) {
-        if(action == MyRfidKeysFileActionView) {
-            my_rfid_keys_show_loaded_info(app, dict, app->loaded_protocol, app->main_view);
-        } else if(action == MyRfidKeysFileActionEmulate) {
-            my_rfid_keys_emulate_loaded(app, worker, dict, app->loaded_protocol, app->main_view);
-        } else if(action == MyRfidKeysFileActionWrite) {
-            my_rfid_keys_write_loaded(app, worker, dict, events, app->loaded_protocol, app->main_view);
-        } else {
-            app->state = MyRfidKeysViewMenu;
-        }
-    } else {
-        app->state = MyRfidKeysViewMenu;
-    }
+    app->state = MyRfidKeysViewMenu;
 
 cleanup:
     memset(app->password, 0, sizeof(app->password));
@@ -1077,7 +968,9 @@ int32_t my_rfid_keys_app(void* p) {
         .events = events,
         .password = {0},
         .filename_input = {0},
-        .menu_index = MyRfidKeysMenuRead,
+        .menu_index = 0,
+        .file_open = false,
+        .loaded_protocol = PROTOCOL_NO,
         .state = MyRfidKeysViewSplash,
         .view_holder = view_holder,
         .main_view = main_view,
@@ -1114,6 +1007,25 @@ int32_t my_rfid_keys_app(void* p) {
             break;
         }
 
+        if(selected_item == MyRfidKeysMenuAbout) {
+            my_rfid_keys_show_about(&app);
+            my_rfid_keys_flush_input(&app);
+            continue;
+        }
+
+        if(selected_item == MyRfidKeysMenuClose) {
+            app.file_open = false;
+            app.loaded_protocol = PROTOCOL_NO;
+            my_rfid_keys_flush_input(&app);
+            continue;
+        }
+
+        if(selected_item == MyRfidKeysMenuEmulate) {
+            my_rfid_keys_emulate_loaded(&app, worker, dict, app.loaded_protocol, app.main_view);
+            my_rfid_keys_flush_input(&app);
+            continue;
+        }
+
         if(selected_item == MyRfidKeysMenuDelete) {
             my_rfid_keys_delete_key(&app, gui, app.main_view, storage, dialogs, dict);
             my_rfid_keys_flush_input(&app);
@@ -1121,7 +1033,7 @@ int32_t my_rfid_keys_app(void* p) {
         }
 
         if(selected_item == MyRfidKeysMenuOpen) {
-            my_rfid_keys_open_file(&app, gui, app.main_view, storage, dialogs, dict, worker, events);
+            my_rfid_keys_open_file(&app, gui, app.main_view, storage, dialogs, dict);
             my_rfid_keys_flush_input(&app);
             continue;
         }
@@ -1170,13 +1082,19 @@ int32_t my_rfid_keys_app(void* p) {
                        furi_string_get_cstr(temp_filename),
                        furi_string_get_cstr(filename),
                        app.password)) {
+                    app.file_open = true;
+                    app.loaded_protocol = read_context.protocol;
                     my_rfid_keys_show_done(&app, "Saved", furi_string_get_cstr(filename));
-                FURI_LOG_I(
-                    TAG,
-                    "Encrypted %s tag %s to %s",
-                    protocol_dict_get_name(dict, read_context.protocol),
-                    furi_string_get_cstr(uid),
-                    furi_string_get_cstr(filename));
+                    my_rfid_keys_view_update(&app);
+                    furi_delay_ms(MY_RFID_KEYS_SUCCESS_MS);
+                    my_rfid_keys_flush_input(&app);
+                    app.state = MyRfidKeysViewMenu;
+                    FURI_LOG_I(
+                        TAG,
+                        "Encrypted %s tag %s to %s",
+                        protocol_dict_get_name(dict, read_context.protocol),
+                        furi_string_get_cstr(uid),
+                        furi_string_get_cstr(filename));
                 } else {
                     app.state = MyRfidKeysViewSaveError;
                     furi_string_set(app.line_1, "Save Failed");
@@ -1198,7 +1116,7 @@ int32_t my_rfid_keys_app(void* p) {
             FURI_LOG_W(TAG, "No LF RFID tag read before timeout");
         }
 
-        if(app.state != MyRfidKeysViewCancelled) {
+        if(app.state != MyRfidKeysViewCancelled && app.state != MyRfidKeysViewMenu) {
             my_rfid_keys_view_update(&app);
             my_rfid_keys_wait_for_exit(&app);
         }
