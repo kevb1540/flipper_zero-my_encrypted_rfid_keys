@@ -7,7 +7,7 @@ App(
     entry_point="my_rfid_keys_app",
     stack_size=4 * 1024,
     fap_category="RFID",
-    fap_version="0.1",
+    fap_version="1.0.0",
     fap_icon="my_rfid_keys.png",  # 10x10 1-bit PNG
     fap_description="Read and save LF RFID tags",
     fap_author="Kevin W. Brown",
