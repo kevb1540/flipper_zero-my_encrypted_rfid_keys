@@ -1,0 +1,17 @@
+# For details & more options, see documentation/AppManifests.md in firmware repo
+
+App(
+    appid="my_rfid_keys",  # Must be unique
+    name="My RFID Keys",  # Displayed in menus
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="my_rfid_keys_app",
+    stack_size=4 * 1024,
+    fap_category="RFID",
+    fap_version="0.1",
+    fap_icon="my_rfid_keys.png",  # 10x10 1-bit PNG
+    fap_description="Read and save LF RFID tags",
+    fap_author="Kevin W. Brown",
+    # fap_weburl="https://github.com/user/my_rfid_keys",
+    fap_icon_assets="images",
+    fap_libs=["liblfrfid.a", "libtoolbox.a"],
+)
