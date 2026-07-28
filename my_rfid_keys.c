@@ -150,6 +150,32 @@ static MyRfidKeysApp* my_rfid_keys_get_view_app(void* model) {
     return *((MyRfidKeysApp**)model);
 }
 
+static void my_rfid_keys_draw_fitted_text(
+    Canvas* canvas,
+    int32_t x,
+    int32_t y,
+    uint16_t max_width,
+    const char* text) {
+    char fitted[MY_RFID_KEYS_FILENAME_MAX_LEN + 8];
+    size_t length = strlen(text);
+
+    if(length >= sizeof(fitted)) {
+        length = sizeof(fitted) - 1;
+    }
+    memcpy(fitted, text, length);
+    fitted[length] = '\0';
+
+    while(length > 3 && canvas_string_width(canvas, fitted) > max_width) {
+        length--;
+        fitted[length - 3] = '.';
+        fitted[length - 2] = '.';
+        fitted[length - 1] = '.';
+        fitted[length] = '\0';
+    }
+
+    canvas_draw_str(canvas, x, y, fitted);
+}
+
 static void my_rfid_keys_draw_callback(Canvas* canvas, void* model) {
     MyRfidKeysApp* app = my_rfid_keys_get_view_app(model);
     const char* hourglass_frames[] = {"|", "/", "-", "\\"};
@@ -214,12 +240,16 @@ static void my_rfid_keys_draw_callback(Canvas* canvas, void* model) {
         canvas_set_font(canvas, FontSecondary);
         canvas_draw_str_aligned(canvas, 64, 44, AlignCenter, AlignCenter, "Choose an .erfid file");
     } else if(app->state == MyRfidKeysViewConfirmDelete) {
-        canvas_draw_str_aligned(canvas, 64, 8, AlignCenter, AlignCenter, "Are you SURE?");
+        canvas_draw_box(canvas, 7, 5, 7, 25);
+        canvas_draw_disc(canvas, 10, 37, 4);
         canvas_set_font(canvas, FontSecondary);
-        canvas_draw_str_aligned(canvas, 64, 25, AlignCenter, AlignCenter, "This file will be");
-        canvas_draw_str_aligned(canvas, 64, 38, AlignCenter, AlignCenter, "permanently deleted.");
-        canvas_draw_str(canvas, 8, 60, "< No");
-        canvas_draw_str_aligned(canvas, 120, 60, AlignRight, AlignBottom, "Yes >");
+        canvas_draw_str(canvas, 24, 9, "Are you sure");
+        canvas_draw_str(canvas, 24, 20, "you want to Delete");
+        my_rfid_keys_draw_fitted_text(
+            canvas, 24, 31, 103, furi_string_get_cstr(app->line_1));
+        canvas_draw_str(canvas, 24, 42, "Permanently gone.");
+        canvas_draw_str(canvas, 4, 62, "< No");
+        canvas_draw_str_aligned(canvas, 124, 62, AlignRight, AlignBottom, "Yes >");
     } else if(app->state == MyRfidKeysViewAbout) {
         canvas_draw_str_aligned(canvas, 64, 22, AlignCenter, AlignCenter, "My RFID Keys");
         canvas_set_font(canvas, FontSecondary);
@@ -785,21 +815,38 @@ cleanup:
 
 static void my_rfid_keys_emulate_loaded(
     MyRfidKeysApp* app,
-    LFRFIDWorker* worker,
+    LFRFIDWorker** worker,
     ProtocolDict* dict,
     ProtocolId protocol,
     View* view) {
     UNUSED(view);
+
+    if(protocol < 0 || protocol >= LFRFIDProtocolMax) {
+        FURI_LOG_E(TAG, "Refusing to emulate invalid protocol id: %ld", (long)protocol);
+        app->file_open = false;
+        app->loaded_protocol = PROTOCOL_NO;
+        app->state = MyRfidKeysViewSaveError;
+        furi_string_set(app->line_1, "Emulate Failed");
+        furi_string_set(app->line_2, "Invalid RFID data");
+        my_rfid_keys_view_update(app);
+        furi_delay_ms(1500);
+        app->state = MyRfidKeysViewMenu;
+        return;
+    }
+
     furi_string_printf(app->line_1, "Emulating %s", protocol_dict_get_name(dict, protocol));
     protocol_dict_render_uid(dict, app->line_2, protocol);
     app->state = MyRfidKeysViewEmulating;
     my_rfid_keys_view_update(app);
 
-    lfrfid_worker_start_thread(worker);
-    lfrfid_worker_emulate_start(worker, protocol);
+    /* A fresh worker avoids stale mode/thread flags after a completed tag scan. */
+    lfrfid_worker_free(*worker);
+    *worker = lfrfid_worker_alloc(dict);
+    lfrfid_worker_start_thread(*worker);
+    lfrfid_worker_emulate_start(*worker, (LFRFIDProtocol)protocol);
     my_rfid_keys_wait_for_exit(app);
-    lfrfid_worker_stop(worker);
-    lfrfid_worker_stop_thread(worker);
+    lfrfid_worker_stop(*worker);
+    lfrfid_worker_stop_thread(*worker);
 }
 
 static bool my_rfid_keys_select_key_file(
@@ -837,9 +884,10 @@ static bool my_rfid_keys_select_key_file(
     return selected;
 }
 
-static bool my_rfid_keys_confirm_delete(MyRfidKeysApp* app) {
+static bool my_rfid_keys_confirm_delete(MyRfidKeysApp* app, const char* path) {
     InputEvent event;
 
+    furi_string_set(app->line_1, my_rfid_keys_basename(path));
     app->state = MyRfidKeysViewConfirmDelete;
     my_rfid_keys_view_update(app);
 
@@ -946,14 +994,9 @@ cleanup:
 static bool my_rfid_keys_verify_file_password(
     MyRfidKeysApp* app,
     Storage* storage,
-    ProtocolDict* dict,
     const char* encrypted_path,
     const char* temp_path) {
-    if(!my_rfid_keys_decrypt_file(storage, encrypted_path, temp_path, app->password)) {
-        return false;
-    }
-
-    return lfrfid_dict_file_load(dict, temp_path) != PROTOCOL_NO;
+    return my_rfid_keys_decrypt_file(storage, encrypted_path, temp_path, app->password);
 }
 
 static void my_rfid_keys_delete_key(
@@ -961,8 +1004,7 @@ static void my_rfid_keys_delete_key(
     Gui* gui,
     View* view,
     Storage* storage,
-    DialogsApp* dialogs,
-    ProtocolDict* dict) {
+    DialogsApp* dialogs) {
     UNUSED(gui);
     UNUSED(view);
     FuriString* result_path = furi_string_alloc();
@@ -971,6 +1013,13 @@ static void my_rfid_keys_delete_key(
 
     if(!my_rfid_keys_select_key_file(
            app, dialogs, storage, result_path, MyRfidKeysViewDeleting)) {
+        app->state = MyRfidKeysViewMenu;
+        goto cleanup;
+    }
+
+    if(!my_rfid_keys_confirm_delete(app, furi_string_get_cstr(result_path))) {
+        app->file_open = false;
+        app->loaded_protocol = PROTOCOL_NO;
         app->state = MyRfidKeysViewMenu;
         goto cleanup;
     }
@@ -990,7 +1039,6 @@ static void my_rfid_keys_delete_key(
         if(my_rfid_keys_verify_file_password(
                app,
                storage,
-               dict,
                furi_string_get_cstr(result_path),
                furi_string_get_cstr(temp_path))) {
             password_ok = true;
@@ -1013,11 +1061,6 @@ static void my_rfid_keys_delete_key(
     }
 
     if(!password_ok) {
-        app->state = MyRfidKeysViewMenu;
-        goto cleanup;
-    }
-
-    if(!my_rfid_keys_confirm_delete(app)) {
         app->state = MyRfidKeysViewMenu;
         goto cleanup;
     }
@@ -1113,13 +1156,13 @@ int32_t my_rfid_keys_app(void* p) {
         }
 
         if(selected_item == MyRfidKeysMenuEmulate) {
-            my_rfid_keys_emulate_loaded(&app, worker, dict, app.loaded_protocol, app.main_view);
+            my_rfid_keys_emulate_loaded(&app, &worker, dict, app.loaded_protocol, app.main_view);
             my_rfid_keys_flush_input(&app);
             continue;
         }
 
         if(selected_item == MyRfidKeysMenuDelete) {
-            my_rfid_keys_delete_key(&app, gui, app.main_view, storage, dialogs, dict);
+            my_rfid_keys_delete_key(&app, gui, app.main_view, storage, dialogs);
             my_rfid_keys_flush_input(&app);
             continue;
         }
