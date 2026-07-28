@@ -21,6 +21,7 @@
 #define MY_RFID_KEYS_SCAN_TIMEOUT_MS (30 * 1000)
 #define MY_RFID_KEYS_SPLASH_MS (5 * 1000)
 #define MY_RFID_KEYS_SUCCESS_MS (5 * 1000)
+#define MY_RFID_KEYS_FILE_SELECTED_MS 3500
 #define MY_RFID_KEYS_READ_DONE (1U << 0)
 #define MY_RFID_KEYS_WRITE_DONE (1U << 1)
 #define MY_RFID_KEYS_PASSWORD_DONE (1U << 2)
@@ -977,7 +978,7 @@ static void my_rfid_keys_open_file(
     app->file_open = true;
     my_rfid_keys_show_done(app, "Opened", furi_string_get_cstr(result_path));
     my_rfid_keys_view_update(app);
-    furi_delay_ms(MY_RFID_KEYS_SUCCESS_MS);
+    furi_delay_ms(MY_RFID_KEYS_FILE_SELECTED_MS);
     my_rfid_keys_flush_input(app);
     app->state = MyRfidKeysViewMenu;
 
