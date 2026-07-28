@@ -432,6 +432,10 @@ static bool my_rfid_keys_wait_for_menu(MyRfidKeysApp* app, View* view, MyRfidKey
         }
 
         if(event.key == InputKeyBack) {
+            if(my_rfid_keys_has_open_file(app)) {
+                continue;
+            }
+
             return false;
         } else if(event.key == InputKeyUp) {
             if(app->menu_index > 0) {
