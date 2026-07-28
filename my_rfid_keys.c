@@ -293,6 +293,12 @@ static bool my_rfid_keys_is_button_press(const InputEvent* event) {
 
 static bool my_rfid_keys_input_callback(InputEvent* event, void* context) {
     MyRfidKeysApp* app = context;
+
+    if(app->state == MyRfidKeysViewMenu && my_rfid_keys_has_open_file(app) &&
+       event->key == InputKeyBack) {
+        return true;
+    }
+
     furi_message_queue_put(app->input_queue, event, FuriWaitForever);
     return true;
 }
