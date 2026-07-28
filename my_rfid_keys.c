@@ -52,6 +52,7 @@ typedef enum {
     MyRfidKeysViewAbout,
     MyRfidKeysViewEmulating,
     MyRfidKeysViewSaved,
+    MyRfidKeysViewWrongPassword,
     MyRfidKeysViewSaveError,
     MyRfidKeysViewTimeout,
     MyRfidKeysViewCancelled,
@@ -263,6 +264,12 @@ static void my_rfid_keys_draw_callback(Canvas* canvas, void* model) {
             canvas, 64, 43, AlignCenter, AlignCenter, furi_string_get_cstr(app->line_1));
         canvas_draw_str_aligned(
             canvas, 64, 58, AlignCenter, AlignCenter, furi_string_get_cstr(app->line_2));
+    } else if(app->state == MyRfidKeysViewWrongPassword) {
+        canvas_draw_str_aligned(
+            canvas, 64, 24, AlignCenter, AlignCenter, furi_string_get_cstr(app->line_1));
+        canvas_set_font(canvas, FontSecondary);
+        canvas_draw_str_aligned(
+            canvas, 64, 44, AlignCenter, AlignCenter, furi_string_get_cstr(app->line_2));
     } else {
         canvas_draw_str_aligned(
             canvas, 64, 14, AlignCenter, AlignCenter, furi_string_get_cstr(app->line_1));
@@ -952,16 +959,18 @@ static void my_rfid_keys_open_file(
         app->loaded_protocol = PROTOCOL_NO;
         memset(app->password, 0, sizeof(app->password));
         storage_common_remove(storage, furi_string_get_cstr(temp_path));
-        app->state = MyRfidKeysViewSaveError;
+        app->state = MyRfidKeysViewWrongPassword;
         furi_string_set(app->line_1, "Wrong Password");
         if(attempt < 2) {
             furi_string_printf(app->line_2, "%u tries left", (unsigned int)(2 - attempt));
             my_rfid_keys_view_update(app);
             furi_delay_ms(1200);
+            my_rfid_keys_flush_input(app);
         } else {
             furi_string_set(app->line_2, "Back to menu");
             my_rfid_keys_view_update(app);
             furi_delay_ms(1500);
+            my_rfid_keys_flush_input(app);
         }
     }
 
@@ -1048,16 +1057,18 @@ static void my_rfid_keys_delete_key(
 
         memset(app->password, 0, sizeof(app->password));
         storage_common_remove(storage, furi_string_get_cstr(temp_path));
-        app->state = MyRfidKeysViewSaveError;
+        app->state = MyRfidKeysViewWrongPassword;
         furi_string_set(app->line_1, "Wrong Password");
         if(attempt < 2) {
             furi_string_printf(app->line_2, "%u tries left", (unsigned int)(2 - attempt));
             my_rfid_keys_view_update(app);
             furi_delay_ms(1200);
+            my_rfid_keys_flush_input(app);
         } else {
             furi_string_set(app->line_2, "Back to menu");
             my_rfid_keys_view_update(app);
             furi_delay_ms(1500);
+            my_rfid_keys_flush_input(app);
         }
     }
 
